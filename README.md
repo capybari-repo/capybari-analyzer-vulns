@@ -12,7 +12,7 @@ Matches every dependency with an exact version (from the `dependencies` capabili
 | | |
 |---|---|
 | Requires | `dependencies` |
-| Scores | Security, Dependency Health |
+| Scores | Security |
 | Network | **required**, `api.osv.dev` only (enforced) |
 | What is sent | package name, ecosystem and version. Never source code, file contents or paths |
 | Offline | skipped. The report says so and recommends running online |
