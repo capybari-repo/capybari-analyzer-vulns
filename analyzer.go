@@ -519,14 +519,14 @@ func packageFinding(p facts.Package, ids []string, details map[string]*Vuln) (fi
 	}
 	return finding.Finding{
 		Dimension: finding.DimSecurity, Category: category, Severity: sev, Confidence: conf,
-		Title:       title,
-		Description: desc,
-		Evidence:    ev,
-		Component:   p.Name + "@" + p.Version,
-		Related:     related,
-		Rule:        &finding.Rule{ID: top.id, Name: top.summary, References: append(refs[:min(len(refs), 5)], top.refs...)},
-		Remediation: &finding.Remediation{Summary: remediation, Automatable: automatable},
-		Tags:        tags,
+		Title:                 title,
+		Description:           desc,
+		Evidence:              ev,
+		Component:             p.Name + "@" + p.Version,
+		Related:               related,
+		Rule:                  &finding.Rule{ID: top.id, Name: top.summary, References: append(refs[:min(len(refs), 5)], top.refs...)},
+		Remediation:           &finding.Remediation{Summary: remediation, Automatable: automatable},
+		Tags:                  tags,
 		FalsePositiveGuidance: "Advisories match on version only. Check whether the vulnerable function is reachable in this application before deprioritising.",
 	}, true
 }

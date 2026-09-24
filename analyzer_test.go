@@ -75,7 +75,7 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 			var body struct {
 				Queries []struct {
 					Package struct{ Name, Ecosystem string } `json:"package"`
-					Version string                          `json:"version"`
+					Version string                           `json:"version"`
 				} `json:"queries"`
 			}
 			json.NewDecoder(r.Body).Decode(&body)
