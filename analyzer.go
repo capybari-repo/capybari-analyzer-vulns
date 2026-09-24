@@ -121,10 +121,18 @@ func (a *Analyzer) Analyze(ctx context.Context, in *analyzer.Input) (*analyzer.R
 		return nil, err
 	}
 	var pkgs []facts.Package
+	skippedStdlib := false
 	for _, p := range deps.Packages {
-		if p.Version != "" && p.Ecosystem != "" {
-			pkgs = append(pkgs, p)
+		if p.Version == "" || p.Ecosystem == "" {
+			continue
 		}
+		// go.mod's "go 1.x" directive is a minimum language version, not
+		// the toolchain in use; only a pinned patch version is matchable.
+		if p.Ecosystem == "Go" && p.Name == "stdlib" && strings.Count(strings.TrimPrefix(p.Version, "go"), ".") < 2 {
+			skippedStdlib = true
+			continue
+		}
+		pkgs = append(pkgs, p)
 	}
 
 	hits := make([][]string, len(pkgs)) // vuln IDs per package
@@ -164,6 +172,9 @@ func (a *Analyzer) Analyze(ctx context.Context, in *analyzer.Input) (*analyzer.R
 		}
 	}
 	limits = append(limits, "Only dependencies with exact versions (from lockfiles) can be matched. Declared ranges without a lockfile are not checked.")
+	if skippedStdlib {
+		limits = append(limits, "The Go standard library was not checked: go.mod declares only a minimum language version. Add a toolchain directive (e.g. toolchain go1.25.3) to pin it.")
+	}
 	return &analyzer.Result{
 		Findings:    findings,
 		Summary:     fmt.Sprintf("%d of %d versioned packages have known vulnerabilities (%d advisories)", vulnerable, len(pkgs), len(ids)),
@@ -468,6 +479,11 @@ func packageFinding(p facts.Package, ids []string, details map[string]*Vuln) (fi
 		sev = lower(sev)
 		tags = append(tags, "dev-dependency")
 	}
+	// Packages declared only in example, docs or test code do not ship.
+	if ctx := nonShippingContext(p.Locations); ctx != "" {
+		sev = lower(lower(sev))
+		tags = append(tags, string(ctx)+"-only")
+	}
 	fix := ""
 	for _, a := range advs {
 		if a.fixed != "" && compareVersions(a.fixed, fix) > 0 {
@@ -529,6 +545,20 @@ func packageFinding(p facts.Package, ids []string, details map[string]*Vuln) (fi
 		Tags:                  tags,
 		FalsePositiveGuidance: "Advisories match on version only. Check whether the vulnerable function is reachable in this application before deprioritising.",
 	}, true
+}
+
+// nonShippingContext returns the shared context when every location is in
+// example, docs or test code, or "" when any location ships.
+func nonShippingContext(locs []string) facts.Context {
+	var ctx facts.Context
+	for _, l := range locs {
+		c := facts.PathContext(l)
+		if c == facts.ContextProduction {
+			return ""
+		}
+		ctx = c
+	}
+	return ctx
 }
 
 func plural(n int, one, many string) string {

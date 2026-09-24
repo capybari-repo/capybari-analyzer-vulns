@@ -85,10 +85,12 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 				case "lodash":
 					results = append(results, map[string]any{"vulns": []map[string]string{{"id": "GHSA-aaaa"}, {"id": "GHSA-bbbb"}}})
 				case "stdlib":
-					if q.Version != "1.19.0" {
-						t.Errorf("Go stdlib version not normalised: %q", q.Version)
+					if q.Version != "1.22.3" {
+						t.Errorf("unexpected Go stdlib version queried: %q", q.Version)
 					}
 					results = append(results, map[string]any{"vulns": []map[string]string{{"id": "GO-2023-0001"}}})
+				case "demo-only":
+					results = append(results, map[string]any{"vulns": []map[string]string{{"id": "GHSA-aaaa"}}})
 				case "evil-pkg":
 					results = append(results, map[string]any{"vulns": []map[string]string{{"id": "MAL-2024-1"}}})
 				default:
@@ -119,7 +121,9 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 		Target: analyzer.Target{Kind: analyzer.TargetRepository, Display: "x"},
 		Evidence: evidence{facts.KeyDependencies: facts.Dependencies{Packages: []facts.Package{
 			{Name: "lodash", Version: "4.17.15", Ecosystem: "npm", Locations: []string{"package-lock.json"}, Direct: &yes},
-			{Name: "stdlib", Version: "1.19", Ecosystem: "Go", Locations: []string{"go.mod"}},
+			{Name: "stdlib", Version: "1.22.3", Ecosystem: "Go", Locations: []string{"go.mod"}},
+			{Name: "stdlib", Version: "1.19", Ecosystem: "Go", Locations: []string{"sub/go.mod"}},
+			{Name: "demo-only", Version: "1.0.0", Ecosystem: "npm", Locations: []string{"examples/demo/package-lock.json"}},
 			{Name: "evil-pkg", Version: "1.0.0", Ecosystem: "npm", Locations: []string{"package-lock.json"}, Direct: &no, Dev: true},
 			{Name: "safe", Version: "1.0.0", Ecosystem: "npm"},
 			{Name: "declared-only", Ecosystem: "npm"},
@@ -146,14 +150,24 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 	if l.Severity != finding.Critical || l.Rule.ID != "GHSA-aaaa" || len(l.Related) != 2 || !strings.Contains(l.Remediation.Summary, "4.17.21") {
 		t.Fatalf("lodash finding: %+v / %+v", l, l.Remediation)
 	}
-	if g := byComp["stdlib@1.19"]; g.Severity != finding.Medium || g.Confidence != finding.ConfidenceMedium {
+	if g := byComp["stdlib@1.22.3"]; g.Severity != finding.Medium || g.Confidence != finding.ConfidenceMedium {
 		t.Fatalf("unknown-severity advisory should be medium/medium: %+v", g)
 	}
 	m := byComp["evil-pkg@1.0.0"]
 	if m.Category != "malicious-package" || m.Severity != finding.High || !strings.Contains(m.Remediation.Summary, "rotate") {
 		t.Fatalf("malicious dev package: %+v", m)
 	}
-	if len(res.Findings) != 3 {
+	if d := byComp["demo-only@1.0.0"]; d.Severity != "medium" || d.Tags[0] != "example-only" {
+		t.Fatalf("example-only package should drop two levels (critical -> medium): %+v", d)
+	}
+	if len(res.Findings) != 4 {
 		t.Fatalf("findings = %d", len(res.Findings))
+	}
+	var noted bool
+	for _, l := range res.Limitations {
+		noted = noted || strings.Contains(l, "Go standard library was not checked")
+	}
+	if !noted {
+		t.Fatalf("unpinned stdlib not explained: %v", res.Limitations)
 	}
 }
