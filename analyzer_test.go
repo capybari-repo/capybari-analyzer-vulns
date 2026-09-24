@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	vulns "github.com/capybari/capybari-analyzer-vulns"
-	"github.com/capybari/capybari-core/analyzer"
-	"github.com/capybari/capybari-core/facts"
-	"github.com/capybari/capybari-core/finding"
-	"github.com/capybari/capybari-schemas"
+	vulns "github.com/capybari-repo/capybari-analyzer-vulns"
+	"github.com/capybari-repo/capybari-core/analyzer"
+	"github.com/capybari-repo/capybari-core/facts"
+	"github.com/capybari-repo/capybari-core/finding"
+	"github.com/capybari-repo/capybari-schemas"
 	"gopkg.in/yaml.v3"
 )
 

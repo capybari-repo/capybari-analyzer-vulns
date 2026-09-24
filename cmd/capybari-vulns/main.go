@@ -3,9 +3,9 @@
 package main
 
 import (
-	dependencies "github.com/capybari/capybari-analyzer-dependencies"
-	vulns "github.com/capybari/capybari-analyzer-vulns"
-	"github.com/capybari/capybari-core/standalone"
+	dependencies "github.com/capybari-repo/capybari-analyzer-dependencies"
+	vulns "github.com/capybari-repo/capybari-analyzer-vulns"
+	"github.com/capybari-repo/capybari-core/standalone"
 )
 
 var version = "dev"

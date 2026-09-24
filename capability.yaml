@@ -20,7 +20,7 @@ engines:
   - name: OSV.dev
     license: Apache-2.0 (service); advisory data CC-BY-4.0 and per-source licenses
     url: https://osv.dev
-methodology: https://github.com/capybari/capybari-analyzer-vulns/blob/main/docs/methodology.md
+methodology: https://github.com/capybari-repo/capybari-analyzer-vulns/blob/main/docs/methodology.md
 follow_ups:
   - capability: tech-detect
     reason: Vulnerable packages often sit on end-of-life frameworks; check lifecycle status of the stack.
