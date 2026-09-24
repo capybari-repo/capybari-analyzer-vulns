@@ -1,0 +1,28 @@
+id: vulns
+name: Known Vulnerability Scanner
+version: 0.1.0
+category: security
+summary: Matches every dependency with an exact version against the OSV.dev advisory database (GitHub Security Advisories, PyPA, Go, RustSec, npm and more) and groups advisories per package with the version that fixes them.
+stability: stable
+core_api: v0
+targets: [repository]
+requires: [dependencies]
+findings: [vulnerability, malicious-package]
+scores: [security, dependencies]
+cost: medium
+execution:
+  local: false
+  network: required
+  ai: none
+  network_hosts: [api.osv.dev]
+privacy: Sends package names, ecosystems and versions (never source code, file contents or paths) to api.osv.dev, the open vulnerability database operated by Google's Open Source Security Team.
+engines:
+  - name: OSV.dev
+    license: Apache-2.0 (service); advisory data CC-BY-4.0 and per-source licenses
+    url: https://osv.dev
+methodology: https://github.com/capybari/capybari-analyzer-vulns/blob/main/docs/methodology.md
+follow_ups:
+  - capability: tech-detect
+    reason: Vulnerable packages often sit on end-of-life frameworks; check lifecycle status of the stack.
+    when:
+      finding_categories: [vulnerability]

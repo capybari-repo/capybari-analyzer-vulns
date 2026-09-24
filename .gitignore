@@ -1,0 +1,5 @@
+/capybari-report/
+/dist/
+*.test
+*.out
+.DS_Store
