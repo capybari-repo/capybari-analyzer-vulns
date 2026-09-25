@@ -38,6 +38,8 @@ const (
 type Analyzer struct {
 	// BaseURL overrides the OSV API endpoint (tests, mirrors).
 	BaseURL string
+	// DepsDevURL overrides the deps.dev API endpoint (tests).
+	DepsDevURL string
 }
 
 // New returns the capability.
@@ -54,6 +56,10 @@ func (*Analyzer) Applies(in *analyzer.Input) (bool, string) {
 	}
 	for _, p := range deps.Packages {
 		if p.Version != "" {
+			return true, ""
+		}
+		// Declared-only direct dependencies can still be checked for existence.
+		if _, ok := depsDevSystem[p.Ecosystem]; ok && p.Direct != nil && *p.Direct {
 			return true, ""
 		}
 	}
@@ -171,13 +177,18 @@ func (a *Analyzer) Analyze(ctx context.Context, in *analyzer.Input) (*analyzer.R
 			vulnerable++
 		}
 	}
+	unknown, checked, err := a.unknownPackages(ctx, in.HTTP, deps.Packages)
+	if err != nil {
+		limits = append(limits, "Registry existence check incomplete: "+err.Error())
+	}
+	findings = append(findings, unknown...)
 	limits = append(limits, "Only dependencies with exact versions (from lockfiles) can be matched. Declared ranges without a lockfile are not checked.")
 	if skippedStdlib {
 		limits = append(limits, "The Go standard library was not checked: go.mod declares only a minimum language version. Add a toolchain directive (e.g. toolchain go1.25.3) to pin it.")
 	}
 	return &analyzer.Result{
 		Findings:    findings,
-		Summary:     fmt.Sprintf("%d of %d versioned packages have known vulnerabilities (%d advisories)", vulnerable, len(pkgs), len(ids)),
+		Summary:     fmt.Sprintf("%d of %d versioned packages have known vulnerabilities (%d advisories); %d of %d direct dependencies not found in their public registry", vulnerable, len(pkgs), len(ids), len(unknown), checked),
 		Limitations: limits,
 	}, nil
 }
@@ -577,4 +588,95 @@ func firstLine(s string) string {
 		s = s[:160] + "…"
 	}
 	return s
+}
+
+// depsDevSystem maps OSV ecosystem names to deps.dev systems.
+var depsDevSystem = map[string]string{
+	"npm": "npm", "PyPI": "pypi", "Go": "go", "Maven": "maven", "crates.io": "cargo", "NuGet": "nuget", "RubyGems": "rubygems",
+}
+
+// unknownPackages asks deps.dev whether each direct dependency exists in its
+// public registry. Only a definite 404 counts: names an assistant invented
+// ("hallucinated") are exactly the slots attackers register (slopsquatting).
+func (a *Analyzer) unknownPackages(ctx context.Context, c *http.Client, pkgs []facts.Package) ([]finding.Finding, int, error) {
+	base := a.DepsDevURL
+	if base == "" {
+		base = "https://api.deps.dev"
+	}
+	var todo []facts.Package
+	seen := map[string]bool{}
+	for _, p := range pkgs {
+		sys, ok := depsDevSystem[p.Ecosystem]
+		if !ok || p.Direct == nil || !*p.Direct || (p.Ecosystem == "Go" && p.Name == "stdlib") || seen[sys+p.Name] {
+			continue
+		}
+		seen[sys+p.Name] = true
+		todo = append(todo, p)
+		if len(todo) == 300 {
+			break
+		}
+	}
+	var mu sync.Mutex
+	var out []finding.Finding
+	var firstErr error
+	jobs := make(chan facts.Package)
+	var wg sync.WaitGroup
+	for range detailWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range jobs {
+				u := fmt.Sprintf("%s/v3/systems/%s/packages/%s", base, depsDevSystem[p.Ecosystem], url.PathEscape(p.Name))
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+				if err != nil {
+					continue
+				}
+				resp, err := c.Do(req)
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					continue
+				}
+				io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusNotFound {
+					continue
+				}
+				// An unscoped public name can be registered by anyone, so an
+				// invented one is directly exploitable. Scoped npm packages,
+				// Maven groups and Go modules are namespaced and often private.
+				sev, conf := finding.High, finding.ConfidenceMedium
+				if strings.HasPrefix(p.Name, "@") || p.Ecosystem == "Maven" || p.Ecosystem == "Go" {
+					sev, conf = finding.Medium, finding.ConfidenceLow
+				}
+				var ev []finding.Evidence
+				for _, l := range p.Locations {
+					ev = append(ev, finding.Evidence{Location: finding.Location{Path: l}, Detail: "declares " + p.Name})
+				}
+				f := finding.Finding{
+					Dimension: finding.DimDependencies, Category: "unknown-package", Severity: sev, Confidence: conf,
+					Title:                 fmt.Sprintf("%s is not in the public %s registry", p.Name, p.Ecosystem),
+					Description:           fmt.Sprintf("The direct dependency %q could not be found in the public %s registry. AI coding assistants sometimes invent plausible package names; if the name is ever registered by someone else, installs pull in their code (\"slopsquatting\").", p.Name, p.Ecosystem),
+					Evidence:              ev,
+					Component:             p.Name,
+					Rule:                  &finding.Rule{ID: "unknown-package", References: []string{"https://deps.dev"}},
+					Remediation:           &finding.Remediation{Summary: "Confirm where this package comes from. Remove it if it was invented, or pin it to your private registry (scoped name, .npmrc / pip index URL) so a public package with the same name can never be installed.", Automatable: false},
+					FalsePositiveGuidance: "Packages from a private registry or monorepo workspace are legitimately absent from the public registry.",
+				}
+				mu.Lock()
+				out = append(out, f)
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, p := range todo {
+		jobs <- p
+	}
+	close(jobs)
+	wg.Wait()
+	sort.Slice(out, func(i, j int) bool { return out[i].Component < out[j].Component })
+	return out, len(todo), firstErr
 }

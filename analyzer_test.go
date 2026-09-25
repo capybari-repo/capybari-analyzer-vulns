@@ -98,6 +98,12 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 				}
 			}
 			json.NewEncoder(w).Encode(map[string]any{"results": results})
+		case strings.HasPrefix(r.URL.Path, "/v3/systems/"):
+			if strings.Contains(r.URL.Path, "invented-helper") {
+				http.NotFound(w, r)
+				return
+			}
+			w.Write([]byte(`{"packageKey":{}}`))
 		case strings.HasPrefix(r.URL.Path, "/v1/vulns/"):
 			id := strings.TrimPrefix(r.URL.Path, "/v1/vulns/")
 			v := map[string]any{"id": id, "summary": "Issue " + id, "aliases": []string{"CVE-2021-" + id[len(id)-4:]}}
@@ -127,11 +133,12 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 			{Name: "evil-pkg", Version: "1.0.0", Ecosystem: "npm", Locations: []string{"package-lock.json"}, Direct: &no, Dev: true},
 			{Name: "safe", Version: "1.0.0", Ecosystem: "npm"},
 			{Name: "declared-only", Ecosystem: "npm"},
+			{Name: "invented-helper", Ecosystem: "npm", Direct: &yes, Locations: []string{"package.json"}},
 		}}},
 		HTTP: srv.Client(),
 		Now:  func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
-	a := &vulns.Analyzer{BaseURL: srv.URL}
+	a := &vulns.Analyzer{BaseURL: srv.URL, DepsDevURL: srv.URL}
 	if ok, why := a.Applies(in); !ok {
 		t.Fatal(why)
 	}
@@ -160,7 +167,14 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 	if d := byComp["demo-only@1.0.0"]; d.Severity != "medium" || d.Tags[0] != "example-only" {
 		t.Fatalf("example-only package should drop two levels (critical -> medium): %+v", d)
 	}
-	if len(res.Findings) != 4 {
+	u := byComp["invented-helper"]
+	if u.Category != "unknown-package" || u.Confidence != finding.ConfidenceMedium || !strings.Contains(u.Description, "slopsquatting") {
+		t.Fatalf("hallucinated package not reported: %+v", u)
+	}
+	if _, bad := byComp["lodash"]; bad {
+		t.Fatal("an existing package must not be reported as unknown")
+	}
+	if len(res.Findings) != 5 {
 		t.Fatalf("findings = %d", len(res.Findings))
 	}
 	var noted bool

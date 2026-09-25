@@ -8,13 +8,14 @@ Matches every dependency with an exact version (from the `dependencies` capabili
 - Severity comes from the CVSS v3 base score, computed locally from the vector, or from the database's own rating (for example GHSA `MODERATE`).
 - **Malicious packages** (`MAL-…`) are critical and come with incident-response guidance.
 - Dev-only dependencies are lowered one severity step and tagged.
+- **Hallucinated-package check:** every direct dependency is looked up on [deps.dev](https://deps.dev). Packages that do not exist in their public registry (npm, PyPI, Go, Maven, Cargo, NuGet, RubyGems) are reported. AI assistants sometimes invent plausible names, and attackers register them ("slopsquatting"). This works even without a lockfile.
 
 | | |
 |---|---|
 | Requires | `dependencies` |
 | Scores | Security |
-| Network | **required**, `api.osv.dev` only (enforced) |
-| What is sent | package name, ecosystem and version. Never source code, file contents or paths |
+| Network | **required**, `api.osv.dev` and `api.deps.dev` only (enforced) |
+| What is sent | package name, ecosystem and version (OSV); direct dependency names (deps.dev). Never source code, file contents or paths |
 | Offline | skipped. The report says so and recommends running online |
 
 ```bash

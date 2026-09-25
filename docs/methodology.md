@@ -22,6 +22,12 @@ A package's finding takes the severity of its most severe advisory.
 
 For each advisory, the lowest `fixed` event greater than the installed version, for the matching package name. The finding recommends the highest of those, so a single upgrade clears every listed advisory.
 
+## Unknown packages (hallucination / slopsquatting check)
+
+For each **direct** dependency, up to 300 per scan, in npm, PyPI, Go (except `stdlib`), Maven, Cargo, NuGet and RubyGems, `GET https://api.deps.dev/v3/systems/{system}/packages/{name}` is requested. Only a **404** produces an `unknown-package` finding: **high** severity for unscoped public names (anyone can register them), **medium** for scoped npm packages, Maven coordinates and Go modules. Network errors and other statuses are ignored and noted as a limitation.
+
+Confidence is **medium**, and **low** for scoped npm packages (`@org/…`), Maven coordinates and Go modules, which are often private. Packages from private registries or workspaces are legitimately absent, and the finding says so.
+
 ## Limitations
 
 - Version matching does not prove the vulnerable code is reachable.
