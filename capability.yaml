@@ -1,13 +1,13 @@
 id: vulns
 name: Known Vulnerability Scanner
-version: 0.2.0
+version: 0.3.0
 category: security
-summary: Matches every dependency with an exact version against the OSV.dev advisory database and groups advisories per package with the version that fixes them; also confirms each direct dependency exists in its public registry (deps.dev), flagging possibly hallucinated or typo-squattable package names.
+summary: Matches every dependency with an exact version against the OSV.dev advisory database and groups advisories per package with the version that fixes them; also confirms each direct dependency exists in its public registry (deps.dev), flagging possibly hallucinated or typo-squattable package names, and reports direct dependencies that are deprecated or have had no release in over 2 years.
 stability: stable
 core_api: v0
 targets: [repository]
 requires: [dependencies]
-findings: [vulnerability, malicious-package, unknown-package]
+findings: [vulnerability, malicious-package, unknown-package, deprecated-package, unmaintained-dependency]
 scores: [security]
 cost: medium
 execution:

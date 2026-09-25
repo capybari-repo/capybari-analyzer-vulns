@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/capybari-repo/capybari-core/analyzer"
 	"github.com/capybari-repo/capybari-core/facts"
@@ -177,18 +178,24 @@ func (a *Analyzer) Analyze(ctx context.Context, in *analyzer.Input) (*analyzer.R
 			vulnerable++
 		}
 	}
-	unknown, checked, err := a.unknownPackages(ctx, in.HTTP, deps.Packages)
+	unknown, registry, checked, err := a.unknownPackages(ctx, in.HTTP, deps.Packages)
 	if err != nil {
 		limits = append(limits, "Registry existence check incomplete: "+err.Error())
 	}
 	findings = append(findings, unknown...)
+	now := time.Now()
+	if in.Now != nil {
+		now = in.Now()
+	}
+	upkeep := maintenanceFindings(registry, checked, now)
+	findings = append(findings, upkeep...)
 	limits = append(limits, "Only dependencies with exact versions (from lockfiles) can be matched. Declared ranges without a lockfile are not checked.")
 	if skippedStdlib {
 		limits = append(limits, "The Go standard library was not checked: go.mod declares only a minimum language version. Add a toolchain directive (e.g. toolchain go1.25.3) to pin it.")
 	}
 	return &analyzer.Result{
 		Findings:    findings,
-		Summary:     fmt.Sprintf("%d of %d versioned packages have known vulnerabilities (%d advisories); %d of %d direct dependencies not found in their public registry", vulnerable, len(pkgs), len(ids), len(unknown), checked),
+		Summary:     fmt.Sprintf("%d of %d versioned packages have known vulnerabilities (%d advisories); %d of %d direct dependencies not found in their public registry; %d deprecated or without a release in 2+ years", vulnerable, len(pkgs), len(ids), len(unknown), checked, len(upkeep)),
 		Limitations: limits,
 	}, nil
 }
@@ -598,7 +605,25 @@ var depsDevSystem = map[string]string{
 // unknownPackages asks deps.dev whether each direct dependency exists in its
 // public registry. Only a definite 404 counts: names an assistant invented
 // ("hallucinated") are exactly the slots attackers register (slopsquatting).
-func (a *Analyzer) unknownPackages(ctx context.Context, c *http.Client, pkgs []facts.Package) ([]finding.Finding, int, error) {
+// registryInfo is what deps.dev says about an existing direct dependency.
+type registryInfo struct {
+	pkg          facts.Package
+	lastRelease  time.Time
+	deprecated   bool
+	deprecReason string
+}
+
+// depsDevPackage is the part of the deps.dev GetPackage response we read.
+type depsDevPackage struct {
+	Versions []struct {
+		PublishedAt      time.Time `json:"publishedAt"`
+		IsDefault        bool      `json:"isDefault"`
+		IsDeprecated     bool      `json:"isDeprecated"`
+		DeprecatedReason string    `json:"deprecatedReason"`
+	} `json:"versions"`
+}
+
+func (a *Analyzer) unknownPackages(ctx context.Context, c *http.Client, pkgs []facts.Package) ([]finding.Finding, []registryInfo, int, error) {
 	base := a.DepsDevURL
 	if base == "" {
 		base = "https://api.deps.dev"
@@ -618,6 +643,7 @@ func (a *Analyzer) unknownPackages(ctx context.Context, c *http.Client, pkgs []f
 	}
 	var mu sync.Mutex
 	var out []finding.Finding
+	var infos []registryInfo
 	var firstErr error
 	jobs := make(chan facts.Package)
 	var wg sync.WaitGroup
@@ -640,8 +666,28 @@ func (a *Analyzer) unknownPackages(ctx context.Context, c *http.Client, pkgs []f
 					mu.Unlock()
 					continue
 				}
-				io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					// The same response says when the package last released
+					// and whether its maintainers deprecated it.
+					var dp depsDevPackage
+					if json.Unmarshal(body, &dp) == nil && len(dp.Versions) > 0 {
+						info := registryInfo{pkg: p}
+						for _, v := range dp.Versions {
+							if v.PublishedAt.After(info.lastRelease) {
+								info.lastRelease = v.PublishedAt
+							}
+							if v.IsDefault && v.IsDeprecated {
+								info.deprecated, info.deprecReason = true, v.DeprecatedReason
+							}
+						}
+						mu.Lock()
+						infos = append(infos, info)
+						mu.Unlock()
+					}
+					continue
+				}
 				if resp.StatusCode != http.StatusNotFound {
 					continue
 				}
@@ -678,5 +724,73 @@ func (a *Analyzer) unknownPackages(ctx context.Context, c *http.Client, pkgs []f
 	close(jobs)
 	wg.Wait()
 	sort.Slice(out, func(i, j int) bool { return out[i].Component < out[j].Component })
-	return out, len(todo), firstErr
+	sort.Slice(infos, func(i, j int) bool { return infos[i].pkg.Name < infos[j].pkg.Name })
+	return out, infos, len(todo), firstErr
+}
+
+// staleAfter is how long without any release makes a dependency look
+// unmaintained. Finished, stable libraries exist, so confidence is low.
+const staleAfter = 2 * 365 * 24 * time.Hour
+
+// maintenanceFindings reports deprecated direct dependencies (one finding
+// each) and those with no release in two years (one grouped finding).
+func maintenanceFindings(infos []registryInfo, checked int, now time.Time) []finding.Finding {
+	var out []finding.Finding
+	var stale []registryInfo
+	for _, in := range infos {
+		p := in.pkg
+		loc := finding.Location{}
+		if len(p.Locations) > 0 {
+			loc.Path = p.Locations[0]
+		}
+		if in.deprecated {
+			reason := in.deprecReason
+			if reason == "" {
+				reason = "no reason given"
+			}
+			out = append(out, finding.Finding{
+				Dimension: finding.DimDependencies, Category: "deprecated-package", Severity: finding.Medium, Confidence: finding.ConfidenceHigh,
+				Title:       fmt.Sprintf("%s is deprecated by its maintainers", p.Name),
+				Description: fmt.Sprintf("The latest %s release of %s is marked deprecated (%s). It will not receive fixes.", p.Ecosystem, p.Name, reason),
+				Evidence:    []finding.Evidence{{Location: loc, Detail: "deprecated: " + reason}},
+				Component:   p.Name,
+				Rule:        &finding.Rule{ID: "deprecated-package", References: []string{"https://deps.dev"}},
+				Impact:      &finding.Impact{Business: "Bugs and vulnerabilities in it will stay unfixed.", Buyer: finding.BuyerSupportCost},
+				Remediation: &finding.Remediation{Summary: "Replace it with the maintained alternative its maintainers recommend."},
+			})
+			continue
+		}
+		if !in.lastRelease.IsZero() && now.Sub(in.lastRelease) > staleAfter {
+			stale = append(stale, in)
+		}
+	}
+	if len(stale) == 0 {
+		return out
+	}
+	sev := finding.Low
+	if len(stale) >= 5 || checked > 0 && len(stale)*4 >= checked {
+		sev = finding.Medium
+	}
+	var ev []finding.Evidence
+	for i, in := range stale {
+		if i == 20 {
+			break
+		}
+		loc := finding.Location{}
+		if len(in.pkg.Locations) > 0 {
+			loc.Path = in.pkg.Locations[0]
+		}
+		ev = append(ev, finding.Evidence{Location: loc, Detail: fmt.Sprintf("%s: last release %s", in.pkg.Name, in.lastRelease.Format("2006-01-02"))})
+	}
+	out = append(out, finding.Finding{
+		Dimension: finding.DimDependencies, Category: "unmaintained-dependency", Severity: sev, Confidence: finding.ConfidenceLow,
+		Title:                 fmt.Sprintf("%d of %d direct dependencies have had no release in over 2 years", len(stale), checked),
+		Description:           "No new version of these packages has been published for more than two years. Some are simply finished; others are abandoned and will not get fixes.",
+		Evidence:              ev,
+		Rule:                  &finding.Rule{ID: "unmaintained-dependency", References: []string{"https://deps.dev"}},
+		Impact:                &finding.Impact{Buyer: finding.BuyerSupportCost},
+		Remediation:           &finding.Remediation{Summary: "Check each package's repository for activity; plan replacements for the abandoned ones."},
+		FalsePositiveGuidance: "Small, stable libraries (a single function, a finished spec) may legitimately not need releases.",
+	})
+	return out
 }

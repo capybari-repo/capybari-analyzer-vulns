@@ -103,7 +103,14 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			w.Write([]byte(`{"packageKey":{}}`))
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/lodash"):
+				w.Write([]byte(`{"versions":[{"publishedAt":"2021-02-20T15:42:16Z","isDefault":true}]}`))
+			case strings.HasSuffix(r.URL.Path, "/request"):
+				w.Write([]byte(`{"versions":[{"publishedAt":"2020-02-11T16:35:28Z","isDefault":true,"isDeprecated":true,"deprecatedReason":"request has been deprecated"}]}`))
+			default:
+				w.Write([]byte(`{"packageKey":{}}`))
+			}
 		case strings.HasPrefix(r.URL.Path, "/v1/vulns/"):
 			id := strings.TrimPrefix(r.URL.Path, "/v1/vulns/")
 			v := map[string]any{"id": id, "summary": "Issue " + id, "aliases": []string{"CVE-2021-" + id[len(id)-4:]}}
@@ -134,6 +141,7 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 			{Name: "safe", Version: "1.0.0", Ecosystem: "npm"},
 			{Name: "declared-only", Ecosystem: "npm"},
 			{Name: "invented-helper", Ecosystem: "npm", Direct: &yes, Locations: []string{"package.json"}},
+			{Name: "request", Ecosystem: "npm", Direct: &yes, Locations: []string{"package.json"}},
 		}}},
 		HTTP: srv.Client(),
 		Now:  func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
@@ -174,7 +182,20 @@ func TestGroupsAdvisoriesPerPackage(t *testing.T) {
 	if _, bad := byComp["lodash"]; bad {
 		t.Fatal("an existing package must not be reported as unknown")
 	}
-	if len(res.Findings) != 5 {
+	if d := byComp["request"]; d.Category != "deprecated-package" || !strings.Contains(d.Description, "request has been deprecated") {
+		t.Fatalf("deprecated package: %+v", d)
+	}
+	var stale finding.Finding
+	for _, f := range res.Findings {
+		if f.Category == "unmaintained-dependency" {
+			stale = f
+		}
+	}
+	// lodash last released 2021-02-20, over two years before 2026-01-01.
+	if len(stale.Evidence) != 1 || !strings.Contains(stale.Evidence[0].Detail, "lodash: last release 2021-02-20") || stale.Impact.Buyer != finding.BuyerSupportCost {
+		t.Fatalf("unmaintained dependency: %+v", stale)
+	}
+	if len(res.Findings) != 7 {
 		t.Fatalf("findings = %d", len(res.Findings))
 	}
 	var noted bool

@@ -9,6 +9,7 @@ Matches every dependency with an exact version (from the `dependencies` capabili
 - **Malicious packages** (`MAL-…`) are critical and come with incident-response guidance.
 - Dev-only dependencies are lowered one severity step and tagged.
 - **Hallucinated-package check:** every direct dependency is looked up on [deps.dev](https://deps.dev). Packages that do not exist in their public registry (npm, PyPI, Go, Maven, Cargo, NuGet, RubyGems) are reported. AI assistants sometimes invent plausible names, and attackers register them ("slopsquatting"). This works even without a lockfile.
+- **Maintenance check (same deps.dev response, no extra requests):** direct dependencies whose latest release is **deprecated** by their maintainers are reported one by one, and those with **no release in over 2 years** in one grouped finding (low confidence: some libraries are simply finished).
 
 | | |
 |---|---|
